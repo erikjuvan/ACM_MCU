@@ -1,7 +1,12 @@
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
 #include <usbd_core.h>
 #include <usbd_cdc.h>
+
 #include "usbd_cdc_if.h"
-#include <usbd_desc.h>
+#include "usbd_desc.h"
 
 USBD_HandleTypeDef USBD_Device;
 void SysTick_Handler(void);
@@ -13,54 +18,23 @@ int VCP_read(void *pBuffer, int size);
 int VCP_write(const void *pBuffer, int size);
 extern char g_VCPInitialized;
 
-#include <stdlib.h>
-#include <string.h>
-#include <math.h>
-
 #define GPIO_SET_BIT(PORT, BIT)		PORT->BSRR = BIT
 #define GPIO_CLR_BIT(PORT, BIT)		PORT->BSRR = (BIT << 16)
+#define GPIO_TOGGLE_BIT(PORT, BIT)	PORT->ODR ^= BIT
 
-#define DEBUG_PIN	GPIO_PIN_11
-#define DEBUG_PORT	GPIOC
-#define DEBUG_CLK	__GPIOC_CLK_ENABLE
+TIM_HandleTypeDef	TIM2_Handle;
+ADC_HandleTypeDef	AdcHandle;
+DMA_HandleTypeDef	DmaHandle;
 
-#define DEBUG_PIN1	GPIO_PIN_7
-#define DEBUG_PORT1	GPIOC
-#define DEBUG_CLK1	__GPIOC_CLK_ENABLE
+#define		DATA_BUFFER_SIZE	20		// Data is sent out every DATA_BUFFER_SIZE / 2 samples
+#define		NUM_OF_CHANNELS		(1 + 3 * 3)	// 1 - optional current measurment, 3 * 3 = for 3 accelerometers
+uint16_t	DataBuffer[DATA_BUFFER_SIZE][NUM_OF_CHANNELS] = { 0 };
 
-#define DEBUG_PIN2	GPIO_PIN_4
-#define DEBUG_PORT2	GPIOD
-#define DEBUG_CLK2	__GPIOD_CLK_ENABLE
-
-#define DEBUG_TOGGLE()		DEBUG_PORT->ODR ^= DEBUG_PIN;
-#define DEBUG1_TOGGLE()		DEBUG_PORT1->ODR ^= DEBUG_PIN1;
-#define DEBUG2_TOGGLE()		DEBUG_PORT2->ODR ^= DEBUG_PIN2;
-
-TIM_HandleTypeDef	TIM2_Handle, TIM3_Handle;
-ADC_HandleTypeDef	g_AdcHandle;
-DMA_HandleTypeDef	g_DmaHandle;
-
-#define PC 1
-#define STOPWATCH
-
-#if PC == 1
-#define		ADC_BUFFER_SIZE		16
-#else
-#define		ADC_BUFFER_SIZE		2
-#endif
-
-#define		N_CHANNELS		4
-uint16_t	g_ADCBuffer[ADC_BUFFER_SIZE][N_CHANNELS] = { 0 };
-uint16_t	startFrame = 0xFFFF;
-
-enum { IDLE = 0, HALF_CPLT, CPLT } adcState = IDLE;
-
-struct {
-	int timer_period;	// us
-} g_parameters = {.timer_period = 1000};
-
-uint32_t capsule_track_cnt[N_CHANNELS] = { 0 };
-uint32_t capsule_cnt = 0;
+enum { 
+	IDLE = 0, 
+	HALF_CPLT,
+	CPLT 
+} adcState = IDLE;
 
 // IRQ
 /////////////////////////////////////
@@ -75,34 +49,26 @@ void OTG_FS_IRQHandler(void)
 }
 	 
 void DMA2_Stream0_IRQHandler() {
-	HAL_DMA_IRQHandler(&g_DmaHandle);
+	HAL_DMA_IRQHandler(&DmaHandle);
 }
- 
-void ADC_IRQHandler() {
-	HAL_ADC_IRQHandler(&g_AdcHandle);
+
+#ifdef DEBUG
+void TIM2_IRQHandler() {	
+	GPIO_TOGGLE_BIT(GPIOA, GPIO_PIN_8);
+	TIM2->SR &= ~(TIM_SR_UIF);
 }
-	
-void TIM2_IRQHandler() {
-	HAL_TIM_IRQHandler(&TIM2_Handle);
-}
-	
-void TIM3_IRQHandler() {
-	HAL_TIM_IRQHandler(&TIM3_Handle);
-}
+#endif //  DEBUG
+
 /////////////////////////////////////		
 
 // IRQ Callbacks
 /////////////////////////////////////
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
-	if (htim->Instance == TIM2) {			// low speed (page)			
-	}
-	else if (htim->Instance == TIM3) {	// high speed (line)
-		HAL_ADC_Start(&g_AdcHandle);
-	}
-}
-
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
 	adcState = CPLT;
+	
+#ifdef DEBUG
+	GPIO_TOGGLE_BIT(GPIOB, GPIO_PIN_9);
+#endif //  DEBUG
 }
 	
 void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc) {
@@ -138,24 +104,24 @@ static void SystemClock_Config(void) {
 
 void DMA_Configure() {
 	__HAL_RCC_DMA2_CLK_ENABLE();
-	g_DmaHandle.Instance = DMA2_Stream0;
+	DmaHandle.Instance = DMA2_Stream0;
   
-	g_DmaHandle.Init.Channel  = DMA_CHANNEL_0;
-	g_DmaHandle.Init.Direction = DMA_PERIPH_TO_MEMORY;
-	g_DmaHandle.Init.PeriphInc = DMA_PINC_DISABLE;
-	g_DmaHandle.Init.MemInc = DMA_MINC_ENABLE;
-	g_DmaHandle.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;
-	g_DmaHandle.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
-	g_DmaHandle.Init.Mode = DMA_CIRCULAR;
-	g_DmaHandle.Init.Priority = DMA_PRIORITY_HIGH;
-	g_DmaHandle.Init.FIFOMode = DMA_FIFOMODE_DISABLE;         
-	g_DmaHandle.Init.FIFOThreshold = DMA_FIFO_THRESHOLD_HALFFULL;
-	g_DmaHandle.Init.MemBurst = DMA_MBURST_SINGLE;
-	g_DmaHandle.Init.PeriphBurst = DMA_PBURST_SINGLE; 
+	DmaHandle.Init.Channel  = DMA_CHANNEL_0;
+	DmaHandle.Init.Direction = DMA_PERIPH_TO_MEMORY;
+	DmaHandle.Init.PeriphInc = DMA_PINC_DISABLE;
+	DmaHandle.Init.MemInc = DMA_MINC_ENABLE;
+	DmaHandle.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;
+	DmaHandle.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
+	DmaHandle.Init.Mode = DMA_CIRCULAR;
+	DmaHandle.Init.Priority = DMA_PRIORITY_HIGH;
+	DmaHandle.Init.FIFOMode = DMA_FIFOMODE_DISABLE;         
+	DmaHandle.Init.FIFOThreshold = DMA_FIFO_THRESHOLD_HALFFULL;
+	DmaHandle.Init.MemBurst = DMA_MBURST_SINGLE;
+	DmaHandle.Init.PeriphBurst = DMA_PBURST_SINGLE; 
     
-	HAL_DMA_Init(&g_DmaHandle);
+	HAL_DMA_Init(&DmaHandle);
     
-	__HAL_LINKDMA(&g_AdcHandle, DMA_Handle, g_DmaHandle);
+	__HAL_LINKDMA(&AdcHandle, DMA_Handle, DmaHandle);
  
 	HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 0, 0);   
 	HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
@@ -164,367 +130,142 @@ void DMA_Configure() {
 
 void ADC_Configure() {
 	GPIO_InitTypeDef	GPIO_InitStructure;
+
+	// ADC Channel / GPIO Pin
+	//  ADC1_CH-0  / GPIOA_0
+	//  ADC1_CH-1  / GPIOA_1
+	//  ADC1_CH-2  / GPIOA_2
 	
-	__HAL_RCC_GPIOA_CLK_ENABLE();
+	//  ADC1_CH-3  / GPIOA_3
+	//  ADC1_CH-8  / GPIOB_0
+	//  ADC1_CH-9  / GPIOB_1	
+	
+	//  ADC1_CH-11 / GPIOC_1
+	//  ADC1_CH-12 / GPIOC_2
+	//  ADC1_CH-14 / GPIOC_4	
+	
+	//  ADC1_CH-15 / GPIOC_5
+		
 	__HAL_RCC_ADC1_CLK_ENABLE();
 	
-	GPIO_InitStructure.Pin = GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3;
+	// PORT A
+	__HAL_RCC_GPIOA_CLK_ENABLE();
+	GPIO_InitStructure.Pin = GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3;
 	GPIO_InitStructure.Mode = GPIO_MODE_ANALOG;
 	GPIO_InitStructure.Pull = GPIO_NOPULL;
 	HAL_GPIO_Init(GPIOA, &GPIO_InitStructure);
 	
+	// PORT B
+	__HAL_RCC_GPIOB_CLK_ENABLE();
+	GPIO_InitStructure.Pin = GPIO_PIN_0 | GPIO_PIN_1;
+	HAL_GPIO_Init(GPIOB, &GPIO_InitStructure);
+	
+	// PORT B
 	__HAL_RCC_GPIOC_CLK_ENABLE();
-	GPIO_InitStructure.Pin = GPIO_PIN_2;
+	GPIO_InitStructure.Pin = GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_4 | GPIO_PIN_5;
 	HAL_GPIO_Init(GPIOC, &GPIO_InitStructure);
 	
-	HAL_NVIC_SetPriority(ADC_IRQn, 1, 0);
-	HAL_NVIC_EnableIRQ(ADC_IRQn);
-	
-	g_AdcHandle.Instance = ADC1;
-	g_AdcHandle.Init.ClockPrescaler = ADC_CLOCKPRESCALER_PCLK_DIV4; // ADC_CLOCKPRESCALER_PCLK_DIV2
-	g_AdcHandle.Init.Resolution = ADC_RESOLUTION_12B;
-	g_AdcHandle.Init.ScanConvMode = ENABLE;
-	g_AdcHandle.Init.ContinuousConvMode = DISABLE;	// ENABLE
-	g_AdcHandle.Init.DiscontinuousConvMode = DISABLE;
-	g_AdcHandle.Init.NbrOfDiscConversion = 0;
-	g_AdcHandle.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;	// ADC_EXTERNALTRIGCONVEDGE_RISING
-	g_AdcHandle.Init.ExternalTrigConv = ADC_SOFTWARE_START;	// ADC_EXTERNALTRIGCONV_T3_CC1
-	g_AdcHandle.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-	g_AdcHandle.Init.NbrOfConversion = 4;
-	g_AdcHandle.Init.DMAContinuousRequests = ENABLE;	// ENABLE
-	g_AdcHandle.Init.EOCSelection = ADC_EOC_SEQ_CONV;
-	HAL_ADC_Init(&g_AdcHandle);
+	AdcHandle.Instance = ADC1;
+	AdcHandle.Init.ClockPrescaler = ADC_CLOCKPRESCALER_PCLK_DIV4;
+	AdcHandle.Init.Resolution = ADC_RESOLUTION_12B;
+	AdcHandle.Init.ScanConvMode = ENABLE;
+	AdcHandle.Init.ContinuousConvMode = DISABLE;
+	AdcHandle.Init.DiscontinuousConvMode = DISABLE;
+	AdcHandle.Init.NbrOfDiscConversion = 0;
+	AdcHandle.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
+	AdcHandle.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T2_TRGO; 	// ADC_EXTERNALTRIGCONV_T3_CC1
+	AdcHandle.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+	AdcHandle.Init.NbrOfConversion = NUM_OF_CHANNELS;
+	AdcHandle.Init.DMAContinuousRequests = ENABLE;	// ENABLE
+	AdcHandle.Init.EOCSelection = ADC_EOC_SEQ_CONV;
+	HAL_ADC_Init(&AdcHandle);
 	
 	ADC_ChannelConfTypeDef adcChannelConfig;
 	
-	adcChannelConfig.Channel = ADC_CHANNEL_12;
+	adcChannelConfig.Channel = ADC_CHANNEL_0;
 	adcChannelConfig.Rank = 1;
-	adcChannelConfig.SamplingTime = ADC_SAMPLETIME_84CYCLES;	// ADC_SAMPLETIME_84CYCLES
-	if (HAL_ADC_ConfigChannel(&g_AdcHandle, &adcChannelConfig) != HAL_OK) {
-	}
+	adcChannelConfig.SamplingTime = ADC_SAMPLETIME_28CYCLES; 	// ADC_SAMPLETIME_84CYCLES
+	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
 
 	// Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time. 
 	adcChannelConfig.Channel = ADC_CHANNEL_1;
 	adcChannelConfig.Rank = 2;
-	if (HAL_ADC_ConfigChannel(&g_AdcHandle, &adcChannelConfig) != HAL_OK) {
-	}
+	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
 
 	// Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time. 
 	adcChannelConfig.Channel = ADC_CHANNEL_2;
 	adcChannelConfig.Rank = 3;
-	if (HAL_ADC_ConfigChannel(&g_AdcHandle, &adcChannelConfig) != HAL_OK) {
-	}
+	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
 	
 	adcChannelConfig.Channel = ADC_CHANNEL_3;
 	adcChannelConfig.Rank = 4;
-	if (HAL_ADC_ConfigChannel(&g_AdcHandle, &adcChannelConfig) != HAL_OK) {
-	}
+	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
+	
+	adcChannelConfig.Channel = ADC_CHANNEL_8;
+	adcChannelConfig.Rank = 5;
+	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
+	
+	adcChannelConfig.Channel = ADC_CHANNEL_9;
+	adcChannelConfig.Rank = 6;
+	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
+	
+	adcChannelConfig.Channel = ADC_CHANNEL_11;
+	adcChannelConfig.Rank = 7;
+	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
+	
+	adcChannelConfig.Channel = ADC_CHANNEL_12;
+	adcChannelConfig.Rank = 8;
+	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
+	
+	adcChannelConfig.Channel = ADC_CHANNEL_14;
+	adcChannelConfig.Rank = 9;
+	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
+	
+	adcChannelConfig.Channel = ADC_CHANNEL_15;
+	adcChannelConfig.Rank = 10;
+	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
 }
 
 void TIM2_Configure() {
 	__TIM2_CLK_ENABLE();
 	
-	TIM2_Handle.Instance = TIM2;
-	TIM2_Handle.Init.Prescaler = (uint32_t)((SystemCoreClock / 2) / 1e5) - 1;	// 100 kHz frequency
-	TIM2_Handle.Init.CounterMode = TIM_COUNTERMODE_UP;
-	TIM2_Handle.Init.Period = 1e5 - 1;	// count to 1e5 gives 1 s interrupt
-	TIM2_Handle.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-	TIM2_Handle.Init.RepetitionCounter = 0;
+	TIM2->PSC = 83;				// Set the Prescaler value: 20, that comes to one tick being 249 ns
+	TIM2->ARR = 1000;  			// Reload timer
+	TIM2->EGR = TIM_EGR_UG;  	// Reset the counter and generate update event		
+	TIM2->CR2 |= TIM_CR2_MMS_1;		
 	
-	HAL_NVIC_SetPriority(TIM2_IRQn, 2, 0);
-	HAL_NVIC_EnableIRQ(TIM2_IRQn);
+#ifdef DEBUG
+	TIM2->DIER |= TIM_DIER_UIE;
+	HAL_NVIC_SetPriority(TIM2_IRQn, 1, 0);
+	HAL_NVIC_EnableIRQ(TIM2_IRQn);			  
+#endif //  DEBUG
+
 	
-	HAL_TIM_Base_Init(&TIM2_Handle);
-	HAL_TIM_Base_Start_IT(&TIM2_Handle);
+	TIM2->CR1 |= TIM_CR1_CEN;
 }
 
-void TIM3_Configure() {
-	TIM_OC_InitTypeDef TIMConfig;
-	__TIM3_CLK_ENABLE();
-	
-	TIM3_Handle.Instance = TIM3;
-	TIM3_Handle.Init.Prescaler = (uint32_t)((SystemCoreClock / 2) / 1e6) - 1;
-	TIM3_Handle.Init.CounterMode = TIM_COUNTERMODE_UP;
-	TIM3_Handle.Init.Period = 1e2 - 1;
-	TIM3_Handle.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-	TIM3_Handle.Init.RepetitionCounter = 0;		
-	
-	HAL_NVIC_SetPriority(TIM3_IRQn, 3, 0);
-	HAL_NVIC_EnableIRQ(TIM3_IRQn);
-		
-	HAL_TIM_Base_Init(&TIM3_Handle);
-	HAL_TIM_Base_Start_IT(&TIM3_Handle);
-}
-
-
-
+#ifdef DEBUG
 void GPIO_Configure() {
 	GPIO_InitTypeDef	GPIO_InitStructure;
 	
-	DEBUG_CLK();
-	DEBUG_CLK1();
-	
-	GPIO_InitStructure.Pin = DEBUG_PIN;
-	GPIO_InitStructure.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStructure.Pull = GPIO_NOPULL;
-	GPIO_InitStructure.Speed = GPIO_SPEED_FREQ_LOW;	// GPIO_SPEED_FREQ_HIGH
-	HAL_GPIO_Init(DEBUG_PORT, &GPIO_InitStructure);	
-	
-	GPIO_InitStructure.Pin = DEBUG_PIN1;
-	HAL_GPIO_Init(DEBUG_PORT1, &GPIO_InitStructure);	
-	
-	// Prozenje za ADC-je za timing test 
-	/*
-	__GPIOA_CLK_ENABLE();
-	GPIO_InitStructure.Pin = GPIO_PIN_3;
-	HAL_GPIO_Init(GPIOA, &GPIO_InitStructure);	
-	GPIO_InitStructure.Pin = GPIO_PIN_3;
-	HAL_GPIO_Init(GPIOC, &GPIO_InitStructure);	
-	*/
-	
-	/* USER BUTTON */
-	__GPIOA_CLK_ENABLE();
-	GPIO_InitStructure.Pin = GPIO_PIN_0;
-	GPIO_InitStructure.Mode = GPIO_MODE_INPUT;
-	GPIO_InitStructure.Pull = GPIO_NOPULL;
-	HAL_GPIO_Init(GPIOA, &GPIO_InitStructure);	
-	
-	/* USER LED */
-	__GPIOD_CLK_ENABLE();
-	GPIO_InitStructure.Pin = GPIO_PIN_13;
-	GPIO_InitStructure.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStructure.Pull = GPIO_NOPULL;
-	GPIO_InitStructure.Speed = GPIO_SPEED_FREQ_LOW;	// GPIO_SPEED_FREQ_HIGH
-	HAL_GPIO_Init(GPIOD, &GPIO_InitStructure);	
-}
-
-int GetUserButton() {
-	if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET) {
-		return 1;
-	} else {
-		return 0;
-	}
-}
-
-void SetUserLED(int val) {
-	if (val) {
-		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
-	} else {
-		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);
-	}
-}
-
-void OutputMCO() {
-	__GPIOA_CLK_ENABLE();
-	__GPIOC_CLK_ENABLE();
-	
-	GPIO_InitTypeDef	GPIO_InitStructure;
-	
+	__HAL_RCC_GPIOA_CLK_ENABLE();
 	GPIO_InitStructure.Pin = GPIO_PIN_8;
-	GPIO_InitStructure.Mode = GPIO_MODE_AF_PP;
+	GPIO_InitStructure.Mode = GPIO_MODE_OUTPUT_PP;
 	GPIO_InitStructure.Pull = GPIO_NOPULL;
-	GPIO_InitStructure.Speed = GPIO_SPEED_FREQ_HIGH;
-	GPIO_InitStructure.Alternate = 0;
-	HAL_GPIO_Init(GPIOA, &GPIO_InitStructure);	
+	HAL_GPIO_Init(GPIOA, &GPIO_InitStructure);
 	
+	__HAL_RCC_GPIOB_CLK_ENABLE();
 	GPIO_InitStructure.Pin = GPIO_PIN_9;
-	HAL_GPIO_Init(GPIOC, &GPIO_InitStructure);
-
-	__HAL_RCC_MCO1_CONFIG(RCC_MCO1SOURCE_PLLCLK, RCC_MCODIV_5);
-	__HAL_RCC_MCO2_CONFIG(RCC_MCO2SOURCE_SYSCLK, RCC_MCODIV_5);
+	HAL_GPIO_Init(GPIOB, &GPIO_InitStructure);
 }
+#endif //  DEBUG
 
-void WaitForGo() {
-	uint8_t ready = 0, buf[3] = { 0, 0, 0 };
-	while (!ready) {
-		VCP_read(buf, 3);
-		if (buf[0] == 'g' && buf[1] == 'o') {
-			ready = 1;
-		}
+void ParseCMD(uint8_t* data, int len) {
+	uint32_t val = atoi((const char*)data);
+	if (0 < val && val < 500000) {
+		TIM2->ARR = val;
+		TIM2->EGR = TIM_EGR_UG; 
 	}
-}
-
-void ChangeSampleFrequency() {
-	TIM3_Handle.Init.Period = g_parameters.timer_period;
-	TIM3_Handle.Instance->CNT = 0;
-	HAL_TIM_Base_Init(&TIM3_Handle);
-}
-
-void ResetValues() {
-	capsule_cnt = 0;
-	
-	for (int i = 0; i < N_CHANNELS; i++) {
-		capsule_track_cnt[i] = 0;
-	}
-}
-
-int ParseCMD(uint8_t *buf, int len) {
-	uint8_t *pt = NULL;
-	
-	pt = (uint8_t *)strtok((char*)buf, ",");
-	
-	// "CSETF,1000" - 1000 is in hertz
-	if (strncmp((char *)pt, "CSETF", strlen((char*)pt)) == 0) {
-		pt = (uint8_t *)strtok(NULL, ",");
-		int val = atoi((char*)pt);		
-		if (val > 0) {
-			g_parameters.timer_period = 1e6 / val - 1;	// convert val which are hertz to period which is in us 
-			ChangeSampleFrequency();
-			return 0;	
-		}
-		else {
-			return 1;
-		}
-	} else if (strncmp((char *)pt, "CRST", strlen((char*)pt)) == 0) {
-		ResetValues();
-	}
-	
-	return 1;
-}
-
-////////////////////////////
-// Counting cycles using DWT
-////////////////////////////
-/* Registers
-DWT_CYCCNT   = (int *)0xE0001004; DWT->CYCCNT
-DWT_CONTROL  = (int *)0xE0001000; DWT->CTRL
-SCB_DEMCR    = (int *)0xE000EDFC; CoreDebug->DEMCR
-*/
-
-/* Example C with ASM
-EnableCC();
-while (1) {
-	__asm__("ldr r3, =0");
-	__asm__("ldr r2, =0xE0001004");
-	__asm__("str r3, [r2]");	// DWT->CYCCNT = 0;
-	// Action to time
-	__asm__("ldr r0, [r2]");	// r0 = DWT->CYCCNT
-}
-
-Only C:
-EnableCC();
-ResetCC();
-// Action to time
-int cycles = GetCC();
-double seconds_taken = cycles * (1.0 / (float)SystemCoreClock);
-__asm__("nop");
-*/
-
-void EnableCC() {
-	CoreDebug->DEMCR |= 0x01000000;	// Enable DWT and ITM features
-	DWT->CYCCNT = 0;	// Set Cycle Count register to zero	
-	DWT->CTRL |= 1;	// Enable CYCCNT
-}
-
-void DisableCC() {
-	DWT->CTRL &= ~1;	// Disable CYCCNT
-}
-
-#define ResetCC() DWT->CYCCNT = 0	// Set Cycle Count register to zero
-#define GetCC() DWT->CYCCNT
-/////////////////////////////////
-
-////////////////////////////////
-// Counting cycles using SysTick
-////////////////////////////////
-/* Registers
-int *STCSR = (int *)0xE000E010;	SysTick->CTRL
-int *STRVR = (int *)0xE000E014;	SysTick->LOAD
-int *STCVR = (int *)0xE000E018;	SysTick->VAL
-*/
-
-/* Example (no initalization needed, because HAL_Init() already initializes SysTick
-__asm__("ldr r2, =0xE000E018");
-__asm__("ldr r0, [r2]");	// r0 = SysTick->VAL;
-// function to time
-__asm__("ldr r1, [r2]");	// r1 = SysTick->VAL;
-__asm__("sub r0, r0, r1");	// r0 = r0 - r1 -> timer counts down
-*/
-
-// Usually not neede because HAL_Init() already initializes SysTick
-void StartST() {
-	SysTick->LOAD = SysTick_LOAD_RELOAD_Msk;
-	SysTick->VAL = 0;
-	SysTick->CTRL = 5;
-}
-
-void StopST() {
-	SysTick->CTRL = 0;
-}
-
-#define GetSTCVR() SysTick->VAL // The number of core clock cycles taken by the operation is given by: (STCVR1 - STCVR2 - 2)
-/////////////////////////////////
-
-#define ARR_I_SIZE	N_CHANNELS * 1000
-int arr_i = 0;
-float arr[ARR_I_SIZE] = { 0 };
-
-void AddValue(float f[N_CHANNELS], int n_elements) {
-	static int state = CPLT;
-	
-	for (int i = 0; i < n_elements; i++) {
-		arr[arr_i++] = f[i];
-		
-		if (arr_i >= ARR_I_SIZE / 2 && state == CPLT) {
-			state = HALF_CPLT;
-			VCP_write(arr, sizeof(arr)/2);
-		}
-		
-		if (arr_i >= ARR_I_SIZE && state == HALF_CPLT) {
-			state = CPLT;
-			VCP_write(&arr[ARR_I_SIZE / 2], sizeof(arr) / 2);
-			arr_i = 0;
-		}
-	}	
-}
-
-__attribute__((optimize("O2"))) void Filter(uint16_t* x) {
-	/*
-	1.stage: LPF
-	y[i] = a * x[i] + (1 - a) * y[i - 1]
-	2.stage: HPf
-	u[i] = a * x[i] + (1 - a) * u[i - 1]
-	y[i] = x[i] - u[i]
-	3.stage: Feature integration implemented with a LPF
-	y[i] = a * abs(x[i]) + (1 - a) * y[i - 1]
-	*/
-	const int BLIND_TIME = 1000;
-	static float y0[N_CHANNELS], y1[N_CHANNELS], y2[N_CHANNELS], y3[N_CHANNELS], y4[N_CHANNELS];
-	const float A1 = 0.01;
-	const float A2 = 0.03;
-	const float A4 = 0.03;
-	const float FTR_THRSHLD = 7.0;
-	static int blind_time[N_CHANNELS] = { 0 };				
-	
-	for (int i = 0; i < N_CHANNELS; i++) {
-		y0[i] = (float)x[i];
-		// LPF
-		y1[i] = A1 * y0[i] + ((float)1.0 - A1) * y1[i];
-		//HPF
-		y2[i] = A2 * y1[i] + ((float)1.0 - A2) * y2[i];					
-		y3[i] = y1[i] - y2[i];	
-		// Feature low pass filter
-		y3[i] = fabsf(y3[i]);
-		y4[i] = A4 * y3[i] + ((float)1.0 - A4) * y4[i];
-		
-		if (blind_time[i] > 0) {
-			blind_time[i]--;
-		}
-		
-		if (y4[i] > FTR_THRSHLD && blind_time[i] <= 0) {
-			capsule_track_cnt[i]++;
-			capsule_cnt++;
-			blind_time[i] = BLIND_TIME;
-			//VCP_write(&capsule_cnt, sizeof(capsule_cnt));			
-		}
-	}
-	
-	AddValue(y4, N_CHANNELS);
-	//ResetCC();
-	//foo();
-	//volatile int cycles = GetCC();		
-	//AddValue(cycles);	
-	//VCP_write(y4, sizeof(y4));	
 }
 
 static void Init() {
@@ -541,47 +282,37 @@ static void Init() {
 	while (USBD_Device.pClassData == 0) {
 	}			
 	
+#ifdef DEBUG
 	GPIO_Configure();
+#endif //  DEBUG
 	ADC_Configure();
 	DMA_Configure();
-	//TIM2_Configure();	
-	TIM3_Configure();	
-	
-#ifdef STOPWATCH
-	EnableCC();	  
-#endif
-
+	TIM2_Configure();	
 }
 
-int main() {				
+int main() {
 	Init();
-	//WaitForGo();
 	
-	HAL_ADC_Start_DMA(&g_AdcHandle, (uint32_t*)(&g_ADCBuffer[0][0]), ADC_BUFFER_SIZE * N_CHANNELS);
+	HAL_ADC_Start_DMA(&AdcHandle, (uint32_t*)(&DataBuffer[0][0]), DATA_BUFFER_SIZE * NUM_OF_CHANNELS);
 	
-	uint8_t rxBuf[20] = { 0 };
+	uint16_t* firstHalf = &DataBuffer[0][0];
+	uint16_t* secondHalf = &DataBuffer[DATA_BUFFER_SIZE / 2][0];
+	
 	while (1) {
-		int read = VCP_read(rxBuf, sizeof(rxBuf));	
-		
+		// Read input commands
+		uint8_t rxBuf[20] = { 0 };
+		int read = VCP_read(rxBuf, sizeof(rxBuf));			
 		if (read > 0) {					
 			ParseCMD(rxBuf, read);
 			memset(rxBuf, 0, sizeof(rxBuf));
 		}
-		
+
 		if (adcState == HALF_CPLT) {
 			adcState = IDLE;
-#if PC == 1
-			VCP_write(&g_ADCBuffer[0][0], (ADC_BUFFER_SIZE * N_CHANNELS));
-#else
-			Filter(&g_ADCBuffer[0][0]);
-#endif
+			VCP_write(firstHalf, (DATA_BUFFER_SIZE * NUM_OF_CHANNELS));
 		} else if (adcState == CPLT) {
 			adcState = IDLE;
-#if PC == 1
-			VCP_write(&g_ADCBuffer[ADC_BUFFER_SIZE / 2][0], (ADC_BUFFER_SIZE * N_CHANNELS));
-#else
-			Filter(&g_ADCBuffer[ADC_BUFFER_SIZE / 2][0]);
-#endif
+			VCP_write(secondHalf, (DATA_BUFFER_SIZE * NUM_OF_CHANNELS));
 		}			
 	}
 }
