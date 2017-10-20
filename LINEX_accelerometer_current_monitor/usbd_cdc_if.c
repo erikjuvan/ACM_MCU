@@ -257,7 +257,7 @@ int VCP_read(void *pBuffer, int size)
 	return todo;
 }
 
-int VCP_write(const void *pBuffer, int size)
+__attribute__((optimize("-O2"))) int VCP_write(const void *pBuffer, int size)
 {
 	if (size > CDC_DATA_FS_MAX_PACKET_SIZE)	// CDC_DATA_HS_OUT_PACKET_SIZE
 	{

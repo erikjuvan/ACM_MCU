@@ -26,9 +26,11 @@ TIM_HandleTypeDef	TIM2_Handle;
 ADC_HandleTypeDef	AdcHandle;
 DMA_HandleTypeDef	DmaHandle;
 
-#define		DATA_BUFFER_SIZE		20		// Data is sent out every DATA_BUFFER_SIZE / 2 samples
+#define		SLOTS_PER_CHANNEL		20		// Data is sent out every SLOTS_PER_CHANNEL / 2 samples
 #define		MAX_NUM_OF_CHANNELS		(1 + 3 * 3)	// 1 - optional current measurment, 3 * 3 = for 3 accelerometers
-uint8_t	DataBuffer[DATA_BUFFER_SIZE][MAX_NUM_OF_CHANNELS] = { 0 };
+
+uint8_t	DataBuffer[SLOTS_PER_CHANNEL * MAX_NUM_OF_CHANNELS] = { 0 };
+uint8_t NumOfChannels = MAX_NUM_OF_CHANNELS;
 
 enum { 
 	IDLE = 0, 
@@ -173,26 +175,25 @@ void ADC_Configure() {
 	AdcHandle.Init.DiscontinuousConvMode = DISABLE;
 	AdcHandle.Init.NbrOfDiscConversion = 0;
 	AdcHandle.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
-	AdcHandle.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T2_TRGO; 	// ADC_EXTERNALTRIGCONV_T3_CC1
+	AdcHandle.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T2_TRGO;
 	AdcHandle.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-	AdcHandle.Init.NbrOfConversion = MAX_NUM_OF_CHANNELS;
-	AdcHandle.Init.DMAContinuousRequests = ENABLE;	// ENABLE
+	AdcHandle.Init.NbrOfConversion = NumOfChannels;
+	AdcHandle.Init.DMAContinuousRequests = ENABLE;
 	AdcHandle.Init.EOCSelection = ADC_EOC_SEQ_CONV;
 	HAL_ADC_Init(&AdcHandle);
 	
 	ADC_ChannelConfTypeDef adcChannelConfig;
-	
+
+	// Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time. 
 	adcChannelConfig.Channel = ADC_CHANNEL_0;
 	adcChannelConfig.Rank = 1;
 	adcChannelConfig.SamplingTime = ADC_SAMPLETIME_28CYCLES;  	// ADC_SAMPLETIME_84CYCLES
 	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
 
-	// Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time. 
 	adcChannelConfig.Channel = ADC_CHANNEL_1;
 	adcChannelConfig.Rank = 2;
 	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
-
-	// Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time. 
+	
 	adcChannelConfig.Channel = ADC_CHANNEL_2;
 	adcChannelConfig.Rank = 3;
 	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
@@ -240,7 +241,6 @@ void TIM_Configure() {
 	HAL_NVIC_EnableIRQ(TIM2_IRQn);			  
 #endif //  DEBUG
 
-	
 	TIM2->CR1 |= TIM_CR1_CEN;
 }
 
@@ -259,14 +259,6 @@ void GPIO_Configure() {
 	HAL_GPIO_Init(GPIOB, &GPIO_InitStructure);
 }
 #endif //  DEBUG
-
-void ParseCMD(uint8_t* data, int len) {
-	uint32_t val = atoi((const char*)data);
-	if (0 < val && val < 500000) {
-		TIM2->ARR = val;
-		TIM2->EGR = TIM_EGR_UG; 
-	}
-}
 
 static void Init() {
 	HAL_Init();	
@@ -290,28 +282,64 @@ static void Init() {
 	TIM_Configure();	
 }
 
-int main() {
-	Init();
-	
-	HAL_ADC_Start_DMA(&AdcHandle, (uint32_t*)(&DataBuffer[0][0]), DATA_BUFFER_SIZE * MAX_NUM_OF_CHANNELS);
-	
-	const int DataTransferSize = (DATA_BUFFER_SIZE * MAX_NUM_OF_CHANNELS * sizeof(uint8_t)) / 2;
+void ParameterInit() {
+	uint8_t rxBuf[20] = { 0 };
+	int read = 0;
+	uint32_t val = 0;
 	
 	while (1) {
-		// Read input commands
-		uint8_t rxBuf[20] = { 0 };
-		int read = VCP_read(rxBuf, sizeof(rxBuf));			
-		if (read > 0) {					
-			ParseCMD(rxBuf, read);
-			memset(rxBuf, 0, sizeof(rxBuf));
+		memset(rxBuf, 0, sizeof(rxBuf));
+		if ((read = VCP_read(rxBuf, sizeof(rxBuf))) > 0) {
+			if (rxBuf[0] == 'g' && rxBuf[1] == 'o') {
+				break;
+			}
 		}
+	}
+	
+	memset(rxBuf, 0, sizeof(rxBuf));
+	
+	// Number of channels
+	while((read = VCP_read(rxBuf, sizeof(rxBuf))) <= 0);	
+	val = atoi((const char*)rxBuf);
+	if (0 < val && val < 11) {
+		NumOfChannels = val;
+	}
+	else {
+		NumOfChannels = MAX_NUM_OF_CHANNELS;
+	}
+		
+	memset(rxBuf, 0, sizeof(rxBuf));
 
+	// us per sample
+	while((read = VCP_read(rxBuf, sizeof(rxBuf))) <= 0);
+	val = atoi((const char*)rxBuf);
+	if (0 < val && val < 500000) {
+		TIM2->ARR = val;
+		TIM2->EGR = TIM_EGR_UG; 
+	}
+	
+	AdcHandle.Init.NbrOfConversion = NumOfChannels;	
+	HAL_ADC_Init(&AdcHandle);	
+}
+
+int main() {
+	Init();
+	ParameterInit();
+	
+	int DataTransferSize = (SLOTS_PER_CHANNEL * NumOfChannels * sizeof(uint8_t)) / 2;
+	
+	HAL_ADC_Start_DMA(&AdcHandle, (uint32_t*)DataBuffer, DataTransferSize * 2 /* "*2" because we are using DMA half complete callback, sort of "double buffering" */);
+	
+	uint8_t* FirstHalf = DataBuffer;
+	uint8_t* SecondHalf = &DataBuffer[DataTransferSize / 2];
+	
+	while (1) {
 		if (adcState == HALF_CPLT) {
 			adcState = IDLE;
-			VCP_write(&DataBuffer[0][0], DataTransferSize);
+			VCP_write(FirstHalf, DataTransferSize);
 		} else if (adcState == CPLT) {
 			adcState = IDLE;
-			VCP_write(&DataBuffer[DATA_BUFFER_SIZE / 2][0], DataTransferSize);
+			VCP_write(SecondHalf, DataTransferSize);
 		}			
 	}
 }
