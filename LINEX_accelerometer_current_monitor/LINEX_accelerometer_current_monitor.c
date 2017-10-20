@@ -313,7 +313,7 @@ void ParameterInit() {
 	// us per sample
 	while((read = VCP_read(rxBuf, sizeof(rxBuf))) <= 0);
 	val = atoi((const char*)rxBuf);
-	if (0 < val && val < 500000) {
+	if (val > 0) {
 		TIM2->ARR = val;
 		TIM2->EGR = TIM_EGR_UG; 
 	}
