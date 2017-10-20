@@ -26,9 +26,9 @@ TIM_HandleTypeDef	TIM2_Handle;
 ADC_HandleTypeDef	AdcHandle;
 DMA_HandleTypeDef	DmaHandle;
 
-#define		DATA_BUFFER_SIZE	20		// Data is sent out every DATA_BUFFER_SIZE / 2 samples
-#define		NUM_OF_CHANNELS		(1 + 3 * 3)	// 1 - optional current measurment, 3 * 3 = for 3 accelerometers
-uint16_t	DataBuffer[DATA_BUFFER_SIZE][NUM_OF_CHANNELS] = { 0 };
+#define		DATA_BUFFER_SIZE		20		// Data is sent out every DATA_BUFFER_SIZE / 2 samples
+#define		MAX_NUM_OF_CHANNELS		(1 + 3 * 3)	// 1 - optional current measurment, 3 * 3 = for 3 accelerometers
+uint8_t	DataBuffer[DATA_BUFFER_SIZE][MAX_NUM_OF_CHANNELS] = { 0 };
 
 enum { 
 	IDLE = 0, 
@@ -110,8 +110,8 @@ void DMA_Configure() {
 	DmaHandle.Init.Direction = DMA_PERIPH_TO_MEMORY;
 	DmaHandle.Init.PeriphInc = DMA_PINC_DISABLE;
 	DmaHandle.Init.MemInc = DMA_MINC_ENABLE;
-	DmaHandle.Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;
-	DmaHandle.Init.MemDataAlignment = DMA_MDATAALIGN_HALFWORD;
+	DmaHandle.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+	DmaHandle.Init.MemDataAlignment = DMA_PDATAALIGN_BYTE;
 	DmaHandle.Init.Mode = DMA_CIRCULAR;
 	DmaHandle.Init.Priority = DMA_PRIORITY_HIGH;
 	DmaHandle.Init.FIFOMode = DMA_FIFOMODE_DISABLE;         
@@ -167,7 +167,7 @@ void ADC_Configure() {
 	
 	AdcHandle.Instance = ADC1;
 	AdcHandle.Init.ClockPrescaler = ADC_CLOCKPRESCALER_PCLK_DIV4;
-	AdcHandle.Init.Resolution = ADC_RESOLUTION_12B;
+	AdcHandle.Init.Resolution = ADC_RESOLUTION_8B;
 	AdcHandle.Init.ScanConvMode = ENABLE;
 	AdcHandle.Init.ContinuousConvMode = DISABLE;
 	AdcHandle.Init.DiscontinuousConvMode = DISABLE;
@@ -175,7 +175,7 @@ void ADC_Configure() {
 	AdcHandle.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
 	AdcHandle.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T2_TRGO; 	// ADC_EXTERNALTRIGCONV_T3_CC1
 	AdcHandle.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-	AdcHandle.Init.NbrOfConversion = NUM_OF_CHANNELS;
+	AdcHandle.Init.NbrOfConversion = MAX_NUM_OF_CHANNELS;
 	AdcHandle.Init.DMAContinuousRequests = ENABLE;	// ENABLE
 	AdcHandle.Init.EOCSelection = ADC_EOC_SEQ_CONV;
 	HAL_ADC_Init(&AdcHandle);
@@ -184,7 +184,7 @@ void ADC_Configure() {
 	
 	adcChannelConfig.Channel = ADC_CHANNEL_0;
 	adcChannelConfig.Rank = 1;
-	adcChannelConfig.SamplingTime = ADC_SAMPLETIME_28CYCLES; 	// ADC_SAMPLETIME_84CYCLES
+	adcChannelConfig.SamplingTime = ADC_SAMPLETIME_28CYCLES;  	// ADC_SAMPLETIME_84CYCLES
 	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
 
 	// Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time. 
@@ -226,7 +226,7 @@ void ADC_Configure() {
 	if (HAL_ADC_ConfigChannel(&AdcHandle, &adcChannelConfig) != HAL_OK) {}
 }
 
-void TIM2_Configure() {
+void TIM_Configure() {
 	__TIM2_CLK_ENABLE();
 	
 	TIM2->PSC = 83;				// Set the Prescaler value: 20, that comes to one tick being 249 ns
@@ -287,16 +287,15 @@ static void Init() {
 #endif //  DEBUG
 	ADC_Configure();
 	DMA_Configure();
-	TIM2_Configure();	
+	TIM_Configure();	
 }
 
 int main() {
 	Init();
 	
-	HAL_ADC_Start_DMA(&AdcHandle, (uint32_t*)(&DataBuffer[0][0]), DATA_BUFFER_SIZE * NUM_OF_CHANNELS);
+	HAL_ADC_Start_DMA(&AdcHandle, (uint32_t*)(&DataBuffer[0][0]), DATA_BUFFER_SIZE * MAX_NUM_OF_CHANNELS);
 	
-	uint16_t* firstHalf = &DataBuffer[0][0];
-	uint16_t* secondHalf = &DataBuffer[DATA_BUFFER_SIZE / 2][0];
+	const int DataTransferSize = (DATA_BUFFER_SIZE * MAX_NUM_OF_CHANNELS * sizeof(uint8_t)) / 2;
 	
 	while (1) {
 		// Read input commands
@@ -309,10 +308,10 @@ int main() {
 
 		if (adcState == HALF_CPLT) {
 			adcState = IDLE;
-			VCP_write(firstHalf, (DATA_BUFFER_SIZE * NUM_OF_CHANNELS));
+			VCP_write(&DataBuffer[0][0], DataTransferSize);
 		} else if (adcState == CPLT) {
 			adcState = IDLE;
-			VCP_write(secondHalf, (DATA_BUFFER_SIZE * NUM_OF_CHANNELS));
+			VCP_write(&DataBuffer[DATA_BUFFER_SIZE / 2][0], DataTransferSize);
 		}			
 	}
 }
