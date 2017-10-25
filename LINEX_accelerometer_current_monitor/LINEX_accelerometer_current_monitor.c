@@ -26,7 +26,7 @@ TIM_HandleTypeDef	TIM2_Handle;
 ADC_HandleTypeDef	AdcHandle;
 DMA_HandleTypeDef	DmaHandle;
 
-#define		SLOTS_PER_CHANNEL		20		// Data is sent out every SLOTS_PER_CHANNEL / 2 samples
+#define		SLOTS_PER_CHANNEL		64		// Power of 2 for faster analysis. Data is sent out every SLOTS_PER_CHANNEL / 2 samples
 #define		MAX_NUM_OF_CHANNELS		(1 + 3 * 3)	// 1 - optional current measurment, 3 * 3 = for 3 accelerometers
 
 uint8_t	DataBuffer[SLOTS_PER_CHANNEL * MAX_NUM_OF_CHANNELS] = { 0 };
