@@ -29,8 +29,8 @@ DMA_HandleTypeDef	DmaHandle;
 #define		SLOTS_PER_CHANNEL		64		// Power of 2 for faster analysis. Data is sent out every SLOTS_PER_CHANNEL / 2 samples
 #define		MAX_NUM_OF_CHANNELS		(1 + 3 * 3)	// 1 - optional current measurment, 3 * 3 = for 3 accelerometers
 
-uint8_t	DataBuffer[SLOTS_PER_CHANNEL * MAX_NUM_OF_CHANNELS] = { 0 };
-uint8_t NumOfChannels = MAX_NUM_OF_CHANNELS;
+uint8_t	dataBuffer[SLOTS_PER_CHANNEL * MAX_NUM_OF_CHANNELS] = { 0 };
+uint8_t numOfChannels = MAX_NUM_OF_CHANNELS;
 
 enum { 
 	IDLE = 0, 
@@ -177,7 +177,7 @@ void ADC_Configure() {
 	AdcHandle.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
 	AdcHandle.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T2_TRGO;
 	AdcHandle.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-	AdcHandle.Init.NbrOfConversion = NumOfChannels;
+	AdcHandle.Init.NbrOfConversion = numOfChannels;
 	AdcHandle.Init.DMAContinuousRequests = ENABLE;
 	AdcHandle.Init.EOCSelection = ADC_EOC_SEQ_CONV;
 	HAL_ADC_Init(&AdcHandle);
@@ -302,10 +302,10 @@ void ParameterInit() {
 	while((read = VCP_read(rxBuf, sizeof(rxBuf))) <= 0);	
 	val = atoi((const char*)rxBuf);
 	if (0 < val && val < 11) {
-		NumOfChannels = val;
+		numOfChannels = val;
 	}
 	else {
-		NumOfChannels = MAX_NUM_OF_CHANNELS;
+		numOfChannels = MAX_NUM_OF_CHANNELS;
 	}
 		
 	memset(rxBuf, 0, sizeof(rxBuf));
@@ -318,7 +318,7 @@ void ParameterInit() {
 		TIM2->EGR = TIM_EGR_UG; 
 	}
 	
-	AdcHandle.Init.NbrOfConversion = NumOfChannels;	
+	AdcHandle.Init.NbrOfConversion = numOfChannels;	
 	HAL_ADC_Init(&AdcHandle);	
 }
 
@@ -326,12 +326,12 @@ int main() {
 	Init();
 	ParameterInit();
 	
-	int DataTransferSize = (SLOTS_PER_CHANNEL * NumOfChannels * sizeof(uint8_t)) / 2;
+	int DataTransferSize = (SLOTS_PER_CHANNEL * numOfChannels * sizeof(uint8_t)) / 2;
 	
-	HAL_ADC_Start_DMA(&AdcHandle, (uint32_t*)DataBuffer, DataTransferSize * 2 /* "*2" because we are using DMA half complete callback, sort of "double buffering" */);
+	HAL_ADC_Start_DMA(&AdcHandle, (uint32_t*)dataBuffer, DataTransferSize * 2 /* "*2" because we are using DMA half complete callback, sort of "double buffering" */);
 	
-	uint8_t* FirstHalf = DataBuffer;
-	uint8_t* SecondHalf = &DataBuffer[DataTransferSize / 2];
+	uint8_t* FirstHalf = dataBuffer;
+	uint8_t* SecondHalf = &dataBuffer[DataTransferSize];
 	
 	while (1) {
 		if (adcState == HALF_CPLT) {
