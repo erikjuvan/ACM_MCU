@@ -267,7 +267,7 @@ static void Init() {
 	USBD_Init(&USBD_Device, &VCP_Desc, 0);
 
 	USBD_RegisterClass(&USBD_Device, &USBD_CDC);
-	USBD_CDC_RegisterInterface(&USBD_Device, &USBD_CDC_LINEX_Sorting_control_fops);
+	USBD_CDC_RegisterInterface(&USBD_Device, &USBD_CDC_MyUSB_fops);
 	USBD_Start(&USBD_Device);
 	
 	// Wait for USB to Initialize

@@ -323,7 +323,7 @@
     <ClCompile Include="C:\Users\erik.kiefer.juvan\AppData\Local\VisualGDB\EmbeddedBSPs\arm-eabi\com.sysprogs.arm.stm32\STM32F4xxxx\STM32F4xx_HAL_Driver\Src\stm32f4xx_ll_utils.c">
       <Filter>Source files\Device-specific files\HAL</Filter>
     </ClCompile>
-    <ClCompile Include="LINEX_accelerometer_current_monitor.c">
+    <ClCompile Include="main.c">
       <Filter>Source files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -697,13 +697,13 @@
     <None Include="debug.mak">
       <Filter>Make files</Filter>
     </None>
-    <None Include="LINEX_Sorting_control-Debug.vgdbsettings">
+    <None Include="ADC_Sampler-MCU-Debug.vgdbsettings">
       <Filter>VisualGDB settings</Filter>
     </None>
     <None Include="release.mak">
       <Filter>Make files</Filter>
     </None>
-    <None Include="LINEX_Sorting_control-Release.vgdbsettings">
+    <None Include="ADC_Sampler-MCU-Release.vgdbsettings">
       <Filter>VisualGDB settings</Filter>
     </None>
     <None Include="stm32.mak">
