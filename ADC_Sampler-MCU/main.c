@@ -310,11 +310,11 @@ void ParameterInit() {
 		
 	memset(rxBuf, 0, sizeof(rxBuf));
 
-	// us per sample
+	// Sample frequency
 	while((read = VCP_read(rxBuf, sizeof(rxBuf))) <= 0);
 	val = atoi((const char*)rxBuf);
 	if (val > 0) {
-		TIM2->ARR = val;
+		TIM2->ARR = (int)((float)1e6 / (float)val); // val is always positive so this round hack is ok
 		TIM2->EGR = TIM_EGR_UG; 
 	}
 	
