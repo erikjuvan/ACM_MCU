@@ -314,6 +314,7 @@ void ParameterInit() {
 	while((read = VCP_read(rxBuf, sizeof(rxBuf))) <= 0);
 	val = atoi((const char*)rxBuf);
 	if (val > 0) {
+		if (val > 1e6) val = 1e6; // Max sample frequency is 1 MHz
 		TIM2->ARR = (int)((float)1e6 / (float)val); // val is always positive so this round hack is ok
 		TIM2->EGR = TIM_EGR_UG; 
 	}
