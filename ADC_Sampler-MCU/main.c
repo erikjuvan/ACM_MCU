@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdbool.h>
 
 #include <usbd_core.h>
 #include <usbd_cdc.h>
@@ -26,11 +27,13 @@ TIM_HandleTypeDef	TIM2_Handle;
 ADC_HandleTypeDef	AdcHandle;
 DMA_HandleTypeDef	DmaHandle;
 
-#define		SLOTS_PER_CHANNEL		64		// Power of 2 for faster analysis. Data is sent out every SLOTS_PER_CHANNEL / 2 samples
+#define		MAX_PACKETS_PER_CHANNEL	1000
 #define		MAX_NUM_OF_CHANNELS		(1 + 3 * 3)	// 1 - optional current measurment, 3 * 3 = for 3 accelerometers
 
-uint8_t	dataBuffer[SLOTS_PER_CHANNEL * MAX_NUM_OF_CHANNELS] = { 0 };
 uint8_t numOfChannels = MAX_NUM_OF_CHANNELS;
+int		packetsPerChannel = MAX_PACKETS_PER_CHANNEL;
+uint8_t	dataBuffer[2 * MAX_PACKETS_PER_CHANNEL * MAX_NUM_OF_CHANNELS] = { 0 }; 	// * 2 because of DMA half cplt transfer
+
 
 enum { 
 	IDLE = 0, 
@@ -282,11 +285,12 @@ static void Init() {
 	TIM_Configure();	
 }
 
-void ParameterInit() {
+bool ParameterInit() {
 	uint8_t rxBuf[20] = { 0 };
 	int read = 0;
 	uint32_t val = 0;
 	
+	// Wait for go
 	while (1) {
 		memset(rxBuf, 0, sizeof(rxBuf));
 		if ((read = VCP_read(rxBuf, sizeof(rxBuf))) > 0) {
@@ -296,38 +300,40 @@ void ParameterInit() {
 		}
 	}
 	
-	memset(rxBuf, 0, sizeof(rxBuf));
-	
 	// Number of channels
+	memset(rxBuf, 0, sizeof(rxBuf));		
 	while((read = VCP_read(rxBuf, sizeof(rxBuf))) <= 0);	
 	val = atoi((const char*)rxBuf);
-	if (0 < val && val < 11) {
-		numOfChannels = val;
-	}
-	else {
-		numOfChannels = MAX_NUM_OF_CHANNELS;
-	}
-		
-	memset(rxBuf, 0, sizeof(rxBuf));
-
+	if (0 < val && val < 11) numOfChannels = val;
+	else return false;
+	
+	// Number of packets per channel
+	memset(rxBuf, 0, sizeof(rxBuf));		
+	while ((read = VCP_read(rxBuf, sizeof(rxBuf))) <= 0);	
+	val = atoi((const char*)rxBuf);
+	if (0 < val && val <= MAX_PACKETS_PER_CHANNEL) packetsPerChannel = val;
+	else return false;
+	
 	// Sample frequency
+	memset(rxBuf, 0, sizeof(rxBuf));	
 	while((read = VCP_read(rxBuf, sizeof(rxBuf))) <= 0);
 	val = atoi((const char*)rxBuf);
-	if (val > 0) {
-		if (val > 1e6) val = 1e6; // Max sample frequency is 1 MHz
-		TIM2->ARR = (int)((float)1e6 / (float)val); // val is always positive so this round hack is ok
+	if (val > 0 && val <= 1e6) {		
+		TIM2->ARR = (int)((float)1e6 / (float)val);   // val is always positive so this round hack is ok
 		TIM2->EGR = TIM_EGR_UG; 
-	}
+	} else return false;
 	
 	AdcHandle.Init.NbrOfConversion = numOfChannels;	
-	HAL_ADC_Init(&AdcHandle);	
+	HAL_ADC_Init(&AdcHandle);
+	
+	return true;
 }
 
 int main() {
 	Init();
-	ParameterInit();
+	while (!ParameterInit());
 	
-	int DataTransferSize = (SLOTS_PER_CHANNEL * numOfChannels * sizeof(uint8_t)) / 2;
+	int DataTransferSize = packetsPerChannel * numOfChannels * sizeof(uint8_t);
 	
 	HAL_ADC_Start_DMA(&AdcHandle, (uint32_t*)dataBuffer, DataTransferSize * 2 /* "*2" because we are using DMA half complete callback, sort of "double buffering" */);
 	
